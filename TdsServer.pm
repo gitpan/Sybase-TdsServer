@@ -19,6 +19,7 @@ Sybase::TdsServer - A simple module to create a tds-server (like Sybase or freet
   $server->shutdown;
   $server->send_header($connect_handle, \@header);
   $server->send_row($connect_handle, \@row);
+  $server->send_returnvalue($conn_handle, {type => 'SYBVARCHAR', value => $retval);
   $server->send_done($connect_handle, $status, $tran_state, $numrows);
   $server->send_eed($connect_handle, $msg_nr, $class, $tran_state, $msg, $server, $procedure, $line);
 
@@ -49,7 +50,7 @@ use IO::Socket;
 use IO::Select;
 use Math::BigInt;
 
-our $VERSION = '0.03';
+our $VERSION = '0.06';
 
 our %coltypes = (#name                num_type  user_type  has_len  has_prec_scale  num_bytes  pack_mask
                  "SYBBINARY"        => [ 45,        3,         1,         0,             0,        'a'],
@@ -92,7 +93,7 @@ our %token_dispatcher = (TDS_LOGOUT      , \&_tds_logout,
                          TDS_OPTIONCMD   , \&_tds_optioncmd,
                          TDS_LANGUAGE    , \&_tds_language,
                          TDS_DBRPC       , \&_tds_dbrpc,
-                         TDS_RPC         , \&_tds_dbrpc,
+                         TDS_RPC         , \&_tds_rpc,
                          TDS_PARAMFMT    , \&_tds_paramfmt,
                          TDS_PARAMFMT2   , \&_tds_paramfmt,
                          TDS_PARAMS      , \&_tds_params,
@@ -195,13 +196,16 @@ sub new {
     CONN_HANDLER    => $_[1],
     DISCONN_HANDLER => $_[2],
     LANG_HANDLER    => $_[3],
-    DEBUG           => $_[4],
   };
- 
+
+  foreach (keys %{$_[4]}) {
+    $self->{$_} = $_[4]->{$_};
+  }
+
   bless $self, $class;
 
 #---- get server ip,port
-  my ($ip, $port) = Sybase::TdsSocket->server_info($self->{SERVERNAME});
+  my ($ip, $port) = Sybase::TdsSocket->server_info($self);
   if (!defined $ip) {
     warn "Servername not found in interfaces\n" if $self->{DEBUG};
     return undef;
@@ -228,36 +232,41 @@ sub new {
   $self->{READERS}->add($self->{LISTEN_SOCKET});
 
 #---- setup defaullt capabilities
-  $self->{CAPABILITIES_REQ} = chr(0) x 8;
+  $self->{CAPABILITIES_REQ} = chr(0) x 16;
   vec($self->{CAPABILITIES_REQ}, $_, 1) = 1 for (TDS_REQ_LANG,
-#                                                 TDS_REQ_RPC,
-                                                 TDS_REQ_PARAM,  
-                                                 TDS_DATA_INT1,  
-                                                 TDS_DATA_INT2, 
-                                                 TDS_DATA_INT4, 
-                                                 TDS_DATA_BIT,   
-                                                 TDS_DATA_CHAR,  
-                                                 TDS_DATA_VCHAR, 
-                                                 TDS_DATA_BIN,   
-                                                 TDS_DATA_VBIN, 
-                                                 TDS_DATA_MNY4, 
-                                                 TDS_DATA_MNY8, 
+                                                 TDS_REQ_RPC,
+                                                 TDS_REQ_EVT,
+                                                 TDS_REQ_MSTMT,
+                                                 TDS_REQ_CURSOR,
+                                                 TDS_REQ_DYNF,
+                                                 TDS_REQ_MSG,
+                                                 TDS_REQ_PARAM,
+                                                 TDS_DATA_INT1,
+                                                 TDS_DATA_INT2,
+                                                 TDS_DATA_INT4,
+                                                 TDS_DATA_BIT,
+                                                 TDS_DATA_CHAR,
+                                                 TDS_DATA_VCHAR,
+                                                 TDS_DATA_BIN,
+                                                 TDS_DATA_VBIN,
+                                                 TDS_DATA_MNY4,
+                                                 TDS_DATA_MNY8,
                                                  TDS_DATA_DATE4,
                                                  TDS_DATA_DATE8,
-                                                 TDS_DATA_FLT4, 
-                                                 TDS_DATA_FLT8, 
-                                                 TDS_DATA_NUM,  
-                                                 TDS_DATA_DEC,  
-                                                 TDS_DATA_INTN, 
+                                                 TDS_DATA_FLT4,
+                                                 TDS_DATA_FLT8,
+                                                 TDS_DATA_NUM,
+                                                 TDS_DATA_DEC,
+                                                 TDS_DATA_INTN,
                                                  TDS_DATA_MONEYN,
                                                  TDS_DATA_FLTN,
                                                  TDS_CON_OOB,
                                                  TDS_CON_INBAND,
                                                  TDS_WIDETABLE,
                                                 );
-  $self->{CAPABILITIES_REQ} = reverse $self->{CAPABILITIES_REQ};
+#  $self->{CAPABILITIES_REQ} = reverse $self->{CAPABILITIES_REQ};
 
-  $self->{CAPABILITIES_RES} = chr(0) x 8;
+  $self->{CAPABILITIES_RES} = chr(0) x 16;
   vec($self->{CAPABILITIES_RES}, $_, 1) = 1 for (TDS_RES_NOMSG,
                                                  TDS_DATA_NOTEXT,
                                                  TDS_DATA_NOIMAGE,
@@ -278,7 +287,7 @@ sub new {
                                                  TDS_BLOB_NONCHAR_8,
                                                  TDS_BLOB_NONCHAR_SCSU,
                                                 );
-  $self->{CAPABILITIES_RES} = reverse $self->{CAPABILITIES_RES};
+#  $self->{CAPABILITIES_RES} = reverse $self->{CAPABILITIES_RES};
 
   return $self;
 }
@@ -322,7 +331,7 @@ All handlers recieve a connection handle as their first parameter.
 
 The decimal value of the command of the OPTIONCMD token. One of:
  1 = set     - set an option
- 2 = deafult - set option to default
+ 2 = default - set option to default
  3 = list    - request current setting
  4 = info    - report current setting
 
@@ -405,7 +414,7 @@ sub run {
   $self->{RUN} = 1;
 
   while ($self->{RUN}) {
-    
+
     my @ready = $self->{READERS}->can_read;
 
     for my $handle (@ready) {
@@ -606,6 +615,72 @@ sub send_row {
 
 #-----------------------------------------------------------------------------------------------------
 
+=head2 send_returnvalue - sends a returnvalue
+
+Parameters:
+
+Connection Handle.
+
+Reference to a hash containing returnvalue information.
+
+
+Examples:
+
+ $s->send_returnvalue($conn_handle, {type => 'SYBDECIMAL', size => 10, scale => 2, value => 123.45);
+ $s->send_returnvalue($conn_handle, {type => 'SYBVARCHAR', value => $retval);
+
+=cut
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+sub send_returnvalue {
+  my ($self, $socket, $retval) = @_;
+
+  return 0 if ! defined $retval;
+
+  my $tdssocket = $self->{SOCKETS}->{$socket}->{TDSSOCKET};
+
+  my $retdata = '';
+  if ($coltypes{$retval->{type}}->[2] || $coltypes{$retval->{type}}->[3]) {     # variable length
+    if (ref $coltypes{$retval->{type}}->[5]) {
+      my $retdata = $coltypes{$retval->{type}}->[5]($retval->{value}, $retval->{size}, $retval->{scale});
+    } else {
+      $retdata = pack 'C C V C C C' . $coltypes{$retval->{type}}->[5] . length($retval->{value}),
+                       0,                                     # NameLen
+                       1,                                     # Status (return)
+                       0,                                     # UserType
+                       $coltypes{$retval->{type}}->[0],       # DataType
+                       length($retval->{value}),              # MaxLen
+                       length($retval->{value}),              # ActLen
+                       $retval->{value};                      # Value
+    }
+  } else {
+    if (ref $coltypes{$retval->{type}}->[5]) {
+      $retdata = $coltypes{$retval->{type}}->[5]($retval->{value}, $retval->{size}, $retval->{scale});
+    } else {
+      $retdata = pack $coltypes{$retval->{type}}->[5], $retval->{value};
+    }
+  }
+
+  my $data = pack('C v', TDS_RETURNVALUE, length($retdata)) . $retdata;
+
+  $tdssocket->packet_type(TDS_BUF_RESPONSE);
+  $tdssocket->write($data);
+
+#---- check for interupt by client
+  my $rin = chr(0);
+  vec($rin,fileno($self->{SOCKETS}->{$socket}->{SOCKET}),1) = 1;
+  if (select($rin, undef, undef, 0)) {
+    $self->_get_attn($tdssocket);
+    $tdssocket->send_done(0x0020, 0, 0, MSG_OOB);
+    return 0;
+  }
+  return 1;
+}
+
+
+#-----------------------------------------------------------------------------------------------------
+
 =head2 send_done - sends a done token to the client
 
 Parameters:
@@ -762,10 +837,10 @@ sub _make_connect {
     $self->_login_ack($socket, 5, $loginrecref->{tds_version});
     $self->{SOCKETS}->{$socket}->{TDSSOCKET}->send_done(TDS_DONE_FINAL,2);
     return 1;
-  }  
+  }
 
 #---- call connect handler
-  my $res = $self->{CONN_HANDLER}($socket, $loginrecref);
+  my $res = $self->{CONN_HANDLER}($socket, $loginrecref->{username}, $loginrecref->{password});
 
   if (!$res) {
     $self->_login_ack($socket, 6, $loginrecref->{tds_version});
@@ -795,7 +870,7 @@ sub _client_disconnect {
   my $self = shift;
   my $socket = shift;
 
-  $self->{DISCONN_HANDLER}($self->{SOCKETS}->{$socket}->{TDSSOCKET});
+  $self->{DISCONN_HANDLER}($socket);
   warn "client disconnected $socket\n" if $self->{DEBUG};
 }
 
@@ -805,18 +880,20 @@ sub _client_disconnect {
 #
 sub _client_input {
   my $self = shift;
-  my $socket = shift;  
+  my $socket = shift;
 
   my $tdssocket = $self->{SOCKETS}->{$socket}->{TDSSOCKET};
   my ($header, $token, $query) = $self->_get_query($tdssocket);
 
+  $self->disconnect($socket), return if (!defined $token);
+
   my $packet_type = unpack('C', $header);
-  
+
   if ($packet_type == TDS_BUF_LOGIN) {
     my $loginrecref = $self->_read_login($socket, unpack('n', substr($header, 2,2)), $header, pack('C',$token).$query);
     return $self->_make_connect($socket, $loginrecref);
   }
-  
+
   if ($packet_type == TDS_BUF_SETUP) {
     $self->{WINDOWSIZE} = unpack('C', substr($header, 7, 1));
     $self->{CHANNEL} = unpack('v', substr($header, 4, 2));
@@ -829,8 +906,6 @@ sub _client_input {
     return;
   }
 
-
-  $self->disconnect($socket), return if (!defined $token);
 
   if (! exists $token_dispatcher{$token} or ! $token_dispatcher{$token}($self, $socket,$token, $query)) {
     $self->send_eed($socket, 7222, 10, 0, 'Unsupported token (' . pack('H', $token) . ') recieved.', $self->{SERVERNAME}, 'unknown', 0);
@@ -934,11 +1009,15 @@ sub _hexify_decimal {
 # _float_length converts a number into 4 or 8 byte float
 #
 sub _float_length {
-  my ($float, $len) = @_;
+  my ($float, $len, $unpack) = @_;
 
   return chr(0) if ! defined $float;
 
-  return ($len == 4) ? pack('C f', 4, $float) : pack('C d', 8, $float);
+  if ($unpack) {
+    return ($len == 4) ? unpack('f', $float) : unpack('d', $float);
+  } else {
+    return ($len == 4) ? pack('C f', 4, $float) : pack('C d', 8, $float);
+  }
 }
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -953,9 +1032,7 @@ sub _money {
   $int .= '0' x (5 - length($decpart));
   $int =~ s/[+,. ]//g;
   my $dec = Math::BigInt->new($int);
-  my $comp = Math::BigInt->new(0x1000000);
-  $comp *= 0x1000000;
-  $comp *= 0x10000;
+  my $comp = Math::BigInt->new('18446744073709551616');
   $dec = $comp + $dec if $dec < 0;
 
   my $hex = '';
@@ -984,8 +1061,7 @@ sub _money4 {
   $int .= '0' x (5 - length($decpart));
   $int =~ s/[+,. ]//g;
   my $dec = Math::BigInt->new($int);
-  my $comp = Math::BigInt->new(0xffffffff);
-  $comp += 1;
+  my $comp = Math::BigInt->new('4294967296');
   $dec = $comp + $dec if $dec < 0;
 
   my $hex = '';
@@ -1054,10 +1130,10 @@ sub _read_login {
   my $tdssocket = $self->{SOCKETS}->{$socket}->{TDSSOCKET};
 
   my %loginrec;
-  
+
 #---- first part of loginpacket
   ($p_len, $header, $data) = $tdssocket->read_packet() if ! $p_len;
-  
+
 #---- second part, if necessary
   if ($p_len == 512) {
     my ($p_len2, $header2, $data2) = $tdssocket->read_packet();
@@ -1068,13 +1144,13 @@ sub _read_login {
 #---- unpack packet step by step
   my $len = unpack 'C', substr($data, 30, 1);
   $loginrec{hostname}                = substr($data, 0, $len);
-  
+
   $len = unpack 'C', substr($data, 61, 1);
   $loginrec{username}                = substr($data, 31, $len);
-  
+
   $len = unpack 'C', substr($data, 92, 1);
   $loginrec{password}                = substr($data, 62, $len);
-  
+
   $len = unpack 'C', substr($data, 123, 1);
   $loginrec{hostprocess}             = substr($data, 93, $len);
 
@@ -1102,13 +1178,13 @@ sub _read_login {
 
   ($v1, $v2, $v3, $v4) = unpack 'C C C C', substr($data, 473, 4);
   $loginrec{prog_version} = join '.', $v1, $v2, $v3, $v4;
-  
+
   $loginrec{noshort}                  = unpack 'C', substr($data, 477, 1);
   $loginrec{float4_representation}    = unpack 'C', substr($data, 478, 1);
   $loginrec{datetime4_representation} = unpack 'C', substr($data, 479, 1);
 
   return \%loginrec if $p_len < 512;
-  
+
   $len = unpack 'C', substr($data, 510, 1);
   $loginrec{language}                 = substr($data, 480, $len);
   $loginrec{setlang}                  = unpack 'C', substr($data, 511, 1);
@@ -1133,9 +1209,11 @@ sub _read_login {
     my $cap_res_len = unpack('C', substr($data, 573 + $cap_req_len, 1));
     my $cap_req = substr($data, 573, $cap_req_len);
     my $cap_res = substr($data, 573 + $cap_req_len, $cap_res_len);
-  
+
     if (exists $self->{HANDLERS}->{capability}) {
-      $self->{CAPABILITIES} = $self->{HANDLERS}->{capability}($socket, $cap_req, $cap_res);
+      ($self->{CAPABILITIES_REQ}, $self->{CAPABILITIES_RES}) = $self->{HANDLERS}->{capability}($socket, $cap_req, $cap_res);
+    } else {
+      ($self->{CAPABILITIES_REQ}, $self->{CAPABILITIES_RES}) = ($cap_req, $cap_res);
     }
   }
 
@@ -1159,7 +1237,7 @@ sub _login_ack {
   $serverversion ||= '0000';
 
   my $serverlen = length($self->{SERVERNAME});
-  
+
   my $data = pack "C v C C C C C C a$serverlen CCCC", TDS_LOGINACK, 10 + $serverlen, $status, $tds_ma, $tds_mi, 0, 0, $serverlen, $self->{SERVERNAME}, split('.', $serverversion);
 
   $tdssocket->packet_type(TDS_BUF_RESPONSE);
@@ -1303,7 +1381,7 @@ sub _tds_language {
   return 1;
 }
 #-----------------------------------------------------------------------------------------------------------------
-# process dbprc token
+# process dbrpc token
 
 sub _tds_dbrpc {
   my ($self, $socket, $token, $query) = @_;
@@ -1311,21 +1389,21 @@ sub _tds_dbrpc {
 
   return undef if ! exists $self->{HANDLERS}->{rpc}; 
 
-  $self->_proto_ack($tdssocket);
+  #$self->_proto_ack($tdssocket);
 
   my $namelen = unpack('C', substr($query, 2, 1));
   my $proc = substr($query, 3, $namelen);
   my $options = unpack('v', substr($query, $namelen + 3, 2));
-  
+
   my ($params, $paramfmt);
   if ($options & TDS_RPC_PARAMS) {
     ($params, $paramfmt) = $self->_tds_params(substr($query, $namelen + 5));
   }
 
   my $dataref = $self->{HANDLERS}->{rpc}($socket, $proc, $params, $paramfmt); 
-  return if ! defined $dataref;
+  return 1 if ! $dataref;
   my $header = shift(@$dataref);
-  
+
   $self->send_header($socket, $header);
 
   my $count = 0;
@@ -1337,6 +1415,91 @@ sub _tds_dbrpc {
 
   return 1;
 }
+#-----------------------------------------------------------------------------------------------------------------
+# process rpc token
+
+sub _tds_rpc {
+  my ($self, $socket, $token, $query) = @_;
+  my $tdssocket = $self->{SOCKETS}->{$socket}->{TDSSOCKET};
+
+  return undef if ! exists $self->{HANDLERS}->{rpc}; 
+
+  #$self->_proto_ack($tdssocket);
+
+  my $len = unpack('v', substr($query, 0, 2));
+  my $namelen = unpack('C', substr($query, 2, 1));
+  my $proc = substr($query, 3, $namelen);
+  my $options = unpack('v', substr($query, $namelen + 3, 2));
+
+  my @pfmts;
+  my @parms;
+  my $offset = 5 + $namelen;
+  while ($offset < $len) {
+    my $parmlen  = unpack('C', substr($query, $offset++));
+    my $parm     = substr($query, $offset, $parmlen);
+    $offset += $parmlen;
+    my $status   = unpack('C', substr($query, $offset++));
+    my $datatype = unpack('C', substr($query, $offset++));
+    my $length;
+    if ($coltypes{$datatypes{$datatype}}[2] == 1) {
+      $length = unpack('C', substr($query, $offset++));
+    } elsif  ($coltypes{$datatypes{$datatype}}[2] == 4) {
+      $length = unpack('V', substr($query, $offset));
+      $offset += 4;
+    } else {
+      $length = 0;
+      $offset += 2;
+    }
+    my ($prec, $scale);
+    if ($coltypes{$datatypes{$datatype}}[3]) {
+      $prec  = unpack('C', substr($query, $offset++));
+      $scale = unpack('C', substr($query, $offset++));
+    }
+
+    my $actlength;
+    if ($coltypes{$datatypes{$datatype}}[2] == 1) {
+      $actlength = unpack('C', substr($query, $offset++));
+    } elsif  ($coltypes{$datatypes{$datatype}}[2] == 4) {
+      $actlength = unpack('V', substr($query, $offset));
+      $offset += 4;
+    } else {
+      $actlength = 0;
+      $offset += 2;
+    }
+    my $val = substr($query, $offset, $actlength);
+
+    $offset += $actlength;
+
+    push @pfmts, {name       => $parm,
+                  status     => $status,
+                  datatype   => $datatype,
+                  length     => $length,
+                  prec       => $prec,
+                  scale      => $scale,
+                 };
+    push @parms, $val;
+  }
+
+
+
+
+
+  my $dataref = $self->{HANDLERS}->{rpc}($socket, $proc, \@parms, \@pfmts); 
+  return 1 if ! $dataref;
+  my $header = shift(@$dataref);
+
+  $self->send_header($socket, $header);
+
+  my $count = 0;
+  while (@$dataref) {
+    $self->send_row($socket, shift(@$dataref));
+    $count++;
+  }
+  $tdssocket->send_done(TDS_DONE_FINAL, 0, $count);
+
+  return 1;
+}
+
 
 #-----------------------------------------------------------------------------------------------------------------
 # process params incl. paramfmt

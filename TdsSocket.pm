@@ -399,17 +399,18 @@ sub server_info {
     return undef, 'SYBASE variable not set!';
   }
 
-  my $file = $^O eq 'MSWin32' ? '/ini/sql.ini' : '/interfaces';
+  my $file = $server->{INTERFACES} ? $server->{INTERFACES} : $^O eq 'MSWin32' ? $ENV{SYBASE}.'/ini/sql.ini' : $ENV{SYBASE}.'/interfaces';
+  my $servername = $server->{SERVERNAME};
 
   my ($ip, $port);
   my $line;
-  
-  open INTERFACES, $ENV{SYBASE} . $file or return undef, "Interfaces file $ENV{SYBASE}$file not found!";
+
+  open INTERFACES, $file or return undef, "Interfaces file $file not found!";
 
   INT: while ($line = <INTERFACES>) {
     chomp $line;
     if ($^O eq 'MSWin32') {
-      if ($line =~ /\[$server\]/) {
+      if ($line =~ /\[$servername\]/) {
         while ($line = <INTERFACES>) {
           chomp $line;
           if ($line =~ /\s*master\s*=/) {
@@ -419,7 +420,7 @@ sub server_info {
         }
       }
     } else {
-      if ($line =~ /^$server$/) {
+      if ($line =~ /^$servername$/) {
         while ($line = <INTERFACES>) {
           chomp $line;
           if ($line =~ /master/) {
@@ -434,7 +435,7 @@ sub server_info {
   close INTERFACES;
 
   if (! defined $ip) {
-    $port = "Servername $server not found in $ENV{SYBASE}$file!";
+    $port = "Servername $servername not found in $ENV{SYBASE}$file!";
   }
 
   return $ip, $port;

@@ -1,0 +1,3 @@
+testserver
+	master tcp ether localhost 54321
+	query tcp ether localhost 54321

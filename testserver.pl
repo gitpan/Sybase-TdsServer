@@ -1,72 +1,28 @@
-# Before `make install' is performed this script should be runnable with
-# `make test'. After `make install' it should work as `perl test.pl'
-
-#########################
-
-# change 'tests => 1' to 'tests => last_test_to_print';
-
-use Test;
-BEGIN { plan tests => 9 };
+use lib 'blib/lib';
 use Sybase::TdsServer;
+
+$SIG{INT} = 'sighandler';
+$SIG{TERM} = 'sighandler';
+$SIG{QUIT} = 'sighandler';
 
 my %connections;
 
-ok(1); # If we made it this far, we're ok.
+my $server   = 'testserver';
+my $user     = 'test';
+my $password = 'test';
 
-my %connect_info;
-{
-  local $/=undef;
-  open DEF, 'connect_info' or last;
-  %connect_info = split /[:\n]/,<DEF>;
-  close DEF;
-}
+print "Starting testserver ...\n";
 
-print "Servername ($connect_info{server}): ";
-my $server = <>;
-chomp $server;
-$server ||= $connect_info{server};
-print "User ($connect_info{user}): ";
-my $user = <>;
-chomp $user;
-$user ||= $connect_info{user};
-print "Password ($connect_info{password}): ";
-my $password = <>;
-chomp $password;
-$password ||= $connect_info{password};
-
-my $s = Sybase::TdsServer->new($server, \&conn_handler, \&disconn_handler, \&lang_handler, 1);
-ok($s);
+my $s = Sybase::TdsServer->new($server, \&conn_handler, \&disconn_handler, \&lang_handler, {DEBUG => 0, INTERFACES => testinterfaces});
 $s->set_handler('rpc', \&rpc_handler);
-print <<EOF;
+$s->set_handler('capability', \&cap_handler);
 
-
-
-
-
-
-
-
-
-
-
-Start isql or sqsh and connect to the server with user and password just entered.
-
-'shutdown' will shutdown this server.
-'let me go' will close the connection.
-'lots of output' will produce just this.
-'all types 1' will return the first half of all possible column types.
-'all types 2' will return the second half.
-most of the types can be returned individually by naming them, like: binary, int2, ...
-
-Everything else will just be reversed.
-
-EOF
-
-ok($s->run);
+$s->run;
 
 sub conn_handler {
   $connections{$_[0]} = join '|', @_[0..2];
   my $res = $user eq $_[1]->{username} && $password eq $_[1]->{password};
+  return 1;
   return $res;
 } 
 
@@ -77,16 +33,26 @@ sub disconn_handler {
 sub rpc_handler {
   my ($connhandle, $proc, $params, $paramfmt) = @_;
 
-  $s->send_header($connhandle, [{column_name => $proc, column_type => 'SYBVARCHAR', column_size => 30}]);
+  if ($proc =~ /parm/) {
+    $s->send_header($connhandle, [{column_name => $proc, column_type => 'SYBVARCHAR', column_size => 30}]);
 
-  my $res;
-  for (0..@$params - 1) {
-    last if ! ($res = $s->send_row($connhandle, [$$params[$_]]));
-    select(undef, undef, undef, 0.1);
-  };
+    my $res;
+    for (0..$#$params) {
+      last if ! ($res = $s->send_row($connhandle, [reverse $$params[$_]]));
+      select(undef, undef, undef, 0.1);
+    };
 
-  $s->send_done($connhandle, 0, 0, 100) if $res;
+  } else {
+    $s->send_returnvalue($connhandle, {type => 'SYBVARCHAR', value => 'bla'});
+  }
+  $s->send_done($connhandle, 0, 0, $#$params + 1);
+
   return undef;
+}
+
+sub cap_handler {
+  my ($connhandle, $req, $res) = @_;
+  return $req, $res, chr(0) x 16;
 }
 
 sub lang_handler {
@@ -232,10 +198,10 @@ sub lang_handler {
   if ($query =~ /^decimal/) {
     $s->send_header($connhandle, [ {column_name => 'SYBDECIMAL',          column_type => 'SYBDECIMAL',          column_size => 8, column_scale => 4}, ]);
     $s->send_row($connhandle, [ 1234.5678 ]);
-    $s->send_row($connhandle, [ 1234.567 ]);
-    $s->send_row($connhandle, [ 1234.56 ]);
-    $s->send_row($connhandle, [ 1234.5 ]);
-    $s->send_row($connhandle, [ 1234 ]);
+#    $s->send_row($connhandle, [ 1234.567 ]);
+#    $s->send_row($connhandle, [ 1234.56 ]);
+#    $s->send_row($connhandle, [ 1234.5 ]);
+#    $s->send_row($connhandle, [ 1234 ]);
     $s->send_done($connhandle, 0, 0, 1);
     return undef;
   }
@@ -326,4 +292,8 @@ sub lang_handler {
              [{column_name => 'result', column_type => 'SYBVARCHAR', column_size => 30}],
              [$answer],
            ];
+}
+
+sub sighandler {
+  $s->shutdown;
 }

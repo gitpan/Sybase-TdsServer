@@ -4,5 +4,7 @@ Makefile.PL
 TdsSocket.pm
 TdsServer.pm
 TdsConstants.pm
-test.pl
-connect_info
+testserver.pl
+testinterfaces
+t/1.t
+t/2.t

@@ -49,7 +49,7 @@ use IO::Socket;
 use IO::Select;
 use Math::BigInt;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 our %coltypes = (#name                num_type  user_type  has_len  has_prec_scale  num_bytes  pack_mask
                  "SYBBINARY"        => [ 45,        3,         1,         0,             0,        'a'],
@@ -211,11 +211,17 @@ sub new {
                                                  Listen    => 20,
                                                  Proto     => 'tcp',
                                                 );
-  do {warn "Could not create Socket $ip:$port\n" if $self->{DEBUG}; return} undef unless $self->{LISTEN_SOCKET};
+  if (! $self->{LISTEN_SOCKET}) {
+    warn "Could not create Socket $ip:$port\n" if $self->{DEBUG}; 
+    return undef; 
+  }
 
 #---- create select object for multiplexing
   $self->{READERS} = IO::Select->new() or return undef;
-  do {warn "Could not create Select object\n" if $self->{DEBUG}, return} undef unless $self->{READERS};
+  if (! $self->{READERS}) {
+    warn "Could not create Select object\n" if $self->{DEBUG};
+    return undef;
+  }
 
   $self->{READERS}->add($self->{LISTEN_SOCKET});
 
@@ -1064,9 +1070,10 @@ sub _read_login {
 # capabilities
 
   if (substr($data, 568, 1) eq chr(TDS_CAPABILITY)) {
-    $len = unpack 'v', substr($data, 569, 2);
-    my $cap_req = substr($data, 572, $len / 2 - 1);
-    my $cap_res = substr($data, 572 + $len / 2, $len / 2 - 1);
+    my $cap_req_len = unpack('C', substr($data, 572, 1));
+    my $cap_res_len = unpack('C', substr($data, 573 + $cap_req_len, 1));
+    my $cap_req = substr($data, 573, $cap_req_len);
+    my $cap_res = substr($data, 573 + $cap_req_len, $cap_res_len);
   
     if (exists $self->{HANDLERS}->{capability}) {
       $self->{CAPABILITIES} = $self->{HANDLERS}->{capability}($socket, $cap_req, $cap_res);

@@ -1,5 +1,9 @@
 Revision history for Perl extension Sybase::TdsServer.
 
+0.03  Wed Oct 21
+  - lots of bugfixes
+  - RPC partly working
+
 0.01  Thu Aug 30 09:29:22 2001
 	- original version; created by h2xs 1.20 with options
 		-PAXOn Sybase::TdsServer

@@ -25,7 +25,21 @@ our @ISA = qw(Exporter);
 our @EXPORT = grep /^TDS_/, keys %Sybase::TdsConstants::;
 
 # packet types
-use constant TDS_RESPONSE      => 0x04;
+use constant TDS_BUF_LANGUAGE    => 0x01;
+use constant TDS_BUF_LOGIN       => 0x02;
+use constant TDS_BUF_RPC         => 0x03;
+use constant TDS_BUF_RESPONSE    => 0x04;
+use constant TDS_BUF_UNFMT       => 0x05;
+use constant TDS_BUF_ATTN        => 0x06;
+use constant TDS_BUF_BULK        => 0x07;
+use constant TDS_BUF_SETUP       => 0x08;
+use constant TDS_BUF_CLOSE       => 0x09;
+use constant TDS_BUF_ERROR       => 0x0a;
+use constant TDS_BUF_PROTO_ACK   => 0x0b;
+use constant TDS_BUF_ECHO        => 0x0c;
+use constant TDS_BUF_LOGOUT      => 0x0d;
+use constant TDS_BUF_ENDPARAM    => 0x0e;
+use constant TDS_BUF_NORMAL      => 0x0f;
 
 # buffer status
 use constant TDS_NORMAL_BUFFER => 0x00;
@@ -237,8 +251,16 @@ use constant TDS_BLOB_NONCHAR_8        => 48;
 use constant TDS_BLOB_NONCHAR_SCSU     => 49;
 
 
-use constant TDS_BUF_NORMAL      => 15;
-use constant TDS_BUFSTAT_ATTNACK => 2;
-use constant TDS_BUFSTAT_EOM     => 1;
+# packet status
+use constant TDS_BUFSTAT_EOM     => 0x01;
+use constant TDS_BUFSTAT_ATTNACK => 0x02;
+use constant TDS_BUFSTAT_ATTN    => 0x04;
+use constant TDS_BUFSTAT_EVENT   => 0x08;
+use constant TDS_BUFSTAT_ENCRYPT => 0x20;
+
+# prc options
+use constant TDS_RPC_UNUSED      => 0x0000;
+use constant TDS_RPC_RFECOMPILE  => 0x0001;
+use constant TDS_RPC_PARAMS      => 0x0002;
 
 1;

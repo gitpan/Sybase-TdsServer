@@ -11,7 +11,7 @@ Sybase::TdsSocket - A module containing tds lowlevel functions
   my $tdssocket = Sybase::TdsSocket->new($socket);
 
   $tdssocket->set_packetsize(512);
-  $tdssocket->packet_type(TDS_RESPONSE);
+  $tdssocket->packet_type(TDS_BUF_RESPONSE);
   
   my ($length, $header, $data) = $tdssocket->read_packet();
   $tdssocket->write($data);
@@ -58,7 +58,7 @@ sub new {
   my $that = shift;
   my $class = ref($that) || $that;
        
-  my $self = { SOCKET => $_[0], PACKETSIZE => 512, PACKETTYPE => TDS_RESPONSE, BUFFER => '' };
+  my $self = { SOCKET => $_[0], PACKETSIZE => 512, PACKETTYPE => TDS_BUF_RESPONSE, BUFFER => '' };
 
   bless $self, $class;
                                            
@@ -74,11 +74,11 @@ Sets the packet type for the next outgoing packets.
 Parameters:
 
 The type, should be one of the following:
- TDS_RESPONSE
+ TDS_BUF_RESPONSE
 
 Example:
 
-my $res = $tdssocket->packet_type(TDS_RESPONSE);
+my $res = $tdssocket->packet_type(TDS_BUF_RESPONSE);
 
 =cut
 
@@ -179,14 +179,14 @@ sub write {
   my $socket = $self->{SOCKET};
 
   my $data = shift;
+  my $header = shift;
 
-  my $header;
   my $packetsize = $self->{PACKETSIZE};
 
   $self->{BUFFER} .= $data if defined $data;
 
   while (length($self->{BUFFER}) > $packetsize - 8) {
-    $header = pack 'C C n CCCC', $self->{PACKETTYPE}, TDS_NORMAL_BUFFER, $packetsize, 0, 0, 0, 0;
+    $header = pack 'C C n CCCC', $self->{PACKETTYPE}, TDS_NORMAL_BUFFER, $packetsize, 0, 0, 0, 0 if ! $header;
     syswrite $socket, $header . $self->{BUFFER}, $packetsize;
     $self->{BUFFER} = substr($self->{BUFFER}, $packetsize - 8);
   }
@@ -213,10 +213,11 @@ my $res = $tdssocket->flush;
 sub flush {
   my $self = shift;
   my $socket = $self->{SOCKET};
+  my $header = shift;
 
-  $self->write;
+  $self->write(undef, $header);
   
-  my $header = pack('C C n CCCC', $self->{PACKETTYPE}, TDS_LAST_BUFFER, length($self->{BUFFER}) + 8, 0, 0, 0, 0);
+  $header = pack('C C n CCCC', $self->{PACKETTYPE}, TDS_LAST_BUFFER, length($self->{BUFFER}) + 8, 0, 0, 0, 0) if ! $header;
   syswrite $socket, $header . $self->{BUFFER}, length($self->{BUFFER}) + 8;
   $self->{BUFFER} = '';
 }
@@ -277,7 +278,7 @@ sub send_done {
 
   my $data = pack "C v v V", TDS_DONE, $status, $tran, $numrows;
 
-  $self->packet_type(TDS_RESPONSE);
+  $self->packet_type(TDS_BUF_RESPONSE);
   if ($oob) {
     my $header = pack 'C C n CCCC', TDS_BUF_NORMAL, TDS_BUFSTAT_ATTNACK | TDS_BUFSTAT_EOM, 8, 0, 0, 0, 0;
     $self->{BUFFER} = '';
@@ -362,7 +363,7 @@ sub send_eed {
            . $proc
            . pack('v', $line);
 
-  $self->packet_type(TDS_RESPONSE);
+  $self->packet_type(TDS_BUF_RESPONSE);
   $self->write($data);
 }
 

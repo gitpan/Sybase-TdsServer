@@ -36,6 +36,7 @@ $password ||= $connect_info{password};
 
 my $s = Sybase::TdsServer->new($server, \&conn_handler, \&disconn_handler, \&lang_handler, 1);
 ok($s);
+$s->set_handler('rpc', \&rpc_handler);
 print <<EOF;
 
 
@@ -71,6 +72,21 @@ sub conn_handler {
 
 sub disconn_handler {
   delete $connections{$_[0]};
+}
+
+sub rpc_handler {
+  my ($connhandle, $proc, $params, $paramfmt) = @_;
+
+  $s->send_header($connhandle, [{column_name => $proc, column_type => 'SYBVARCHAR', column_size => 30}]);
+
+  my $res;
+  for (0..@$params - 1) {
+    last if ! ($res = $s->send_row($connhandle, [$$params[$_]]));
+    select(undef, undef, undef, 0.1);
+  };
+
+  $s->send_done($connhandle, 0, 0, 100) if $res;
+  return undef;
 }
 
 sub lang_handler {

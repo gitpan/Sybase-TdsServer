@@ -1,0 +1,8 @@
+Changes
+MANIFEST
+Makefile.PL
+TdsSocket.pm
+TdsServer.pm
+TdsConstants.pm
+test.pl
+connect_info
